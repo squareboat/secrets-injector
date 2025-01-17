@@ -1,15 +1,29 @@
 {
-  "name": "nestjs-aws-secrets-manager",
+  "name": "secrets-injector",
   "version": "1.1.3",
-  "description": "NestJS AWS Secrets Manager",
+  "description": "NestJS AWS Secrets Injector",
   "author": "Anubhavjain786",
   "license": "MIT",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "keywords": [
-    "nest",
-    "secrets-manager",
-    "aws"
+    "nestjs",
+    "aws",
+    "aws-secrets-manager",
+    "secrets-management",
+    "environment-variables",
+    "config",
+    "process.env",
+    "nestjs-module",
+    "aws-sdk",
+    "configuration",
+    "secret-injection",
+    "dotenv",
+    "secrets-injector",
+    "secure-config",
+    "nodejs",
+    "environment-variable-injection",
+    "nestjs-config"
   ],
   "files": [
     "dist"
@@ -80,12 +94,12 @@
     "node": "16.17.0",
     "npm": "8.17.0"
   },
-  "homepage": "https://github.com/Anubhavjain786/nestjs-aws-secrets-manager#readme",
+  "homepage": "https://github.com/Anubhavjain786/secrets-injector#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Anubhavjain786/nestjs-aws-secrets-manager.git"
+    "url": "git+https://github.com/Anubhavjain786/secrets-injector.git"
   },
   "bugs": {
-    "url": "https://github.com/Anubhavjain786/nestjs-aws-secrets-manager/issues"
+    "url": "https://github.com/Anubhavjain786/secrets-injector/issues"
   }
 }
