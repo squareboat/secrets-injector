@@ -3,7 +3,7 @@
 **Secrets-Injector** is an npm package that simplifies the process of fetching environment variables from AWS Secrets Manager and injecting them into `process.env` during the build process of a NestJS application. It helps you securely manage and use sensitive configuration data in your application, without having to manually manage environment files.
 
 <p align="center">
-  <a href="http://nestjs.com"><img alt="Nest Logo" src="./Anubhav@4x-100.png" width="400" /></a>
+  <a href="http://nestjs.com"><img alt="Logo" src="https://github.com/user-attachments/assets/77c83c57-bb0a-4e47-98cc-ef39caec13a2" width="400" /></a>
 </p>
 
 <p align="center">
