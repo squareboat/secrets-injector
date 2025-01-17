@@ -72,7 +72,7 @@
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
     "tag": "latest",
-    "@~anubhavjain786:registry": "https://npm.pkg.github.com"
+    "~anubhavjain786:registry": "https://npm.pkg.github.com"
   },
   "jest": {
     "moduleFileExtensions": [
