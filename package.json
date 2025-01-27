@@ -1,6 +1,6 @@
 {
   "name": "secrets-injector",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "NestJS AWS Secrets Injector",
   "author": "Anubhavjain786",
   "license": "MIT",
