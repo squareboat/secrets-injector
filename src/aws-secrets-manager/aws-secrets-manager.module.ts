@@ -14,24 +14,21 @@ import { AWSSecretsService } from './aws-secrets-manager.service';
 @Module({})
 export class AWSSecretsManagerModule {
   static forRoot(options: AWSSecretsManagerModuleOptions): DynamicModule {
-    const providers = createAWSSecretsManagerProviders(options);
     return {
       module: AWSSecretsManagerModule,
-      providers,
+      providers: createAWSSecretsManagerProviders(options),
       exports: [AWSSecretsService],
     };
   }
 
-  public static forRootAsync(
+  static forRootAsync(
     options: AWSSecretsManagerModuleAsyncOptions,
   ): DynamicModule {
-    const providers = createAWSSecretsManagerAsyncProviders(options);
-
     return {
       module: AWSSecretsManagerModule,
-      imports: options.imports,
-      providers: providers,
-      exports: providers,
-    } as DynamicModule;
+      imports: options.imports || [],
+      providers: createAWSSecretsManagerAsyncProviders(options),
+      exports: [AWSSecretsService],
+    };
   }
 }

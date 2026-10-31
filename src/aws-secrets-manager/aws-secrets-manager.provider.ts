@@ -1,4 +1,4 @@
-import { Provider, Type } from '@nestjs/common';
+import { Provider } from '@nestjs/common';
 
 import {
   AWSSecretsManagerModuleOptions,
@@ -41,25 +41,6 @@ export function createAWSSecretsManagerAsyncProviders(
   options: AWSSecretsManagerModuleAsyncOptions,
 ): Provider[] {
   const providers: Provider[] = [secretsServiceProvider];
-  if (options.useClass) {
-    const useClass =
-      options.useClass as Type<AWSSecretsManagerModuleOptionsFactory>;
-    providers.push(
-      ...[
-        {
-          provide: AWS_SECRETS_MANAGER_MODULE_OPTIONS,
-          useFactory: async (
-            optionsFactory: AWSSecretsManagerModuleOptionsFactory,
-          ) => await optionsFactory.createAWSSecrectsManagerModuleOptions(),
-          inject: [useClass],
-        },
-        {
-          provide: useClass,
-          useClass,
-        },
-      ],
-    );
-  }
 
   if (options.useFactory) {
     providers.push({
@@ -67,6 +48,24 @@ export function createAWSSecretsManagerAsyncProviders(
       useFactory: options.useFactory,
       inject: options.inject || [],
     });
+    return providers;
+  }
+
+  const factory = options.useClass || options.useExisting;
+  if (!factory) {
+    throw new Error(
+      'AWSSecretsManagerModule.forRootAsync() needs useFactory, useClass or useExisting',
+    );
+  }
+
+  providers.push({
+    provide: AWS_SECRETS_MANAGER_MODULE_OPTIONS,
+    useFactory: async (optionsFactory: AWSSecretsManagerModuleOptionsFactory) =>
+      await optionsFactory.createAWSSecrectsManagerModuleOptions(),
+    inject: [factory],
+  });
+  if (options.useClass) {
+    providers.push({ provide: options.useClass, useClass: options.useClass });
   }
 
   return providers;
