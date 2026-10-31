@@ -33,7 +33,7 @@
     "format": "prettier --write \"src/**/*.ts\"",
     "lint": "eslint \"src/**/*.ts\" --fix",
     "check-types": "tsc --pretty --noEmit",
-    "prepare": "husky",
+    "prepare": "husky && npm run build",
     "prepublishOnly": "npm run build",
     "publish:npm": "npm publish --access public"
   },
@@ -64,8 +64,7 @@
   },
   "publishConfig": {
     "registry": "https://registry.npmjs.org/",
-    "tag": "latest",
-    "~anubhavjain786:registry": "https://npm.pkg.github.com"
+    "tag": "latest"
   },
   "volta": {
     "node": "22.23.2"
