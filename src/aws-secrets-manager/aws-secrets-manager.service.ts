@@ -12,15 +12,17 @@ export class AWSSecretsService {
   constructor(
     @Inject(AWS_SECRETS_MANAGER_MODULE_OPTIONS)
     private readonly options: AWSSecretsManagerModuleOptions,
-  ) {
-    if (this.options.secretsSource && this.options.isSetToEnv) {
-      this.setAllSecrectToEnv();
-    }
-  }
+  ) {}
 
+  /**
+   * Fetches every secret in `secretsSource` and copies its keys into
+   * `process.env` (existing variables with the same name are overwritten).
+   * With `isSetToEnv: true` the module calls this once at startup and waits
+   * for it. Errors are logged, not thrown.
+   */
   async setAllSecrectToEnv() {
     try {
-      const secrets = await this.getAllSecrects();
+      const secrets = await this.getAllSecrects<Record<string, unknown>>();
 
       if (!secrets) {
         this.logger.warn('There is no secrets to set in env');
@@ -28,7 +30,7 @@ export class AWSSecretsService {
       }
 
       Object.keys(secrets).forEach((key) => {
-        process.env[key] = secrets[key];
+        process.env[key] = String(secrets[key]);
       });
 
       this.logger.log(
@@ -45,38 +47,34 @@ export class AWSSecretsService {
     }
   }
 
-  async getAllSecrects<T>() {
+  /**
+   * Fetches every secret in `secretsSource` and merges their JSON key/value
+   * pairs (later secrets win). Returns `undefined` and logs the error if any
+   * secret cannot be fetched or parsed.
+   */
+  async getAllSecrects<T>(): Promise<T | undefined> {
     try {
-      const secretsIds = Array.isArray(this.options.secretsSource)
-        ? this.options.secretsSource
-        : [this.options.secretsSource];
+      const source = this.options.secretsSource;
+      const secretsIds = (Array.isArray(source) ? source : [source]).filter(
+        (id): id is string => Boolean(id),
+      );
 
-      if (!Boolean(secretsIds.length)) {
+      if (!secretsIds.length) {
         this.logger.log('Secrets source is empty');
       }
 
-      const commands = secretsIds.map(
-        (secretId) =>
-          new GetSecretValueCommand({
-            SecretId: secretId,
-          }),
+      const secrets = await Promise.all(
+        secretsIds.map((secretId) =>
+          this.options.secretsManager.send(
+            new GetSecretValueCommand({ SecretId: secretId }),
+          ),
+        ),
       );
 
-      const resp = commands.map((command) =>
-        this.options.secretsManager.send(command),
+      const response = secrets.reduce(
+        (acc, secret) => ({ ...acc, ...JSON.parse(secret.SecretString!) }),
+        {},
       );
-
-      const secrets = await Promise.all(resp);
-
-      const response = secrets.reduce((acc, secret) => {
-        const sec = JSON.parse(secret.SecretString);
-
-        const allSecrets = {
-          ...acc,
-          ...sec,
-        };
-        return allSecrets;
-      }, {});
 
       return response as T;
     } catch (e: any) {
@@ -84,15 +82,19 @@ export class AWSSecretsService {
     }
   }
 
-  async getSecretsByID<T>(secretId: string) {
+  /**
+   * Fetches one secret by name or ARN and returns its parsed JSON value.
+   * Returns `undefined` and logs the error if it cannot be fetched or parsed.
+   */
+  async getSecretsByID<T>(secretId: string): Promise<T | undefined> {
     try {
       const command = new GetSecretValueCommand({
         SecretId: secretId,
-      } as any);
+      });
 
       const secret = await this.options.secretsManager.send(command);
 
-      return JSON.parse(secret.SecretString) as T;
+      return JSON.parse(secret.SecretString!) as T;
     } catch (e: any) {
       this.logger.error(`Unable to fetch secrets(${e.message})`);
     }
