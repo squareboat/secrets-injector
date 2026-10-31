@@ -13,6 +13,13 @@ export interface AWSSecretsManagerModuleOptions {
   secretsSource?: string | string[];
   /** Log the loaded secrets, values included. Do not enable in production. */
   isDebug?: boolean;
+  /**
+   * Maximum time in ms for each Secrets Manager call made by this package,
+   * SDK retries included. Default 10000; 0 turns it off. The SDK itself has
+   * no timeout by default, so an endpoint that never answers (for example a
+   * private subnet without a NAT gateway or VPC endpoint) would block startup.
+   */
+  timeout?: number;
 }
 
 export interface AWSSecretsManagerModuleOptionsFactory {
