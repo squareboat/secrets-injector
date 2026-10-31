@@ -2,7 +2,10 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 
 import { GetSecretValueCommand } from '@aws-sdk/client-secrets-manager';
 
-import { AWS_SECRETS_MANAGER_MODULE_OPTIONS } from './contstants';
+import {
+  AWS_SECRETS_MANAGER_MODULE_OPTIONS,
+  DEFAULT_TIMEOUT_MS,
+} from './contstants';
 import { AWSSecretsManagerModuleOptions } from './aws-secrets-manager.interface';
 
 @Injectable()
@@ -12,89 +15,131 @@ export class AWSSecretsService {
   constructor(
     @Inject(AWS_SECRETS_MANAGER_MODULE_OPTIONS)
     private readonly options: AWSSecretsManagerModuleOptions,
-  ) {
-    if (this.options.secretsSource && this.options.isSetToEnv) {
-      this.setAllSecrectToEnv();
-    }
-  }
+  ) {}
 
-  async setAllSecrectToEnv() {
+  /**
+   * Fetches every secret in `secretsSource` and copies its keys into
+   * `process.env` (existing variables with the same name are overwritten).
+   * With `isSetToEnv: true` the module calls this once at startup and waits
+   * for it. Errors are logged, not thrown. Resolves to `true` when the
+   * variables were set.
+   */
+  async setAllSecrectToEnv(): Promise<boolean> {
     try {
-      const secrets = await this.getAllSecrects();
+      const ids = this.secretIds();
+      this.logger.log(
+        `Loading ${ids.length} secret(s) from AWS Secrets Manager (id: ${JSON.stringify(ids)})`,
+      );
+
+      const secrets = await this.getAllSecrects<Record<string, unknown>>();
 
       if (!secrets) {
-        this.logger.warn('There is no secrets to set in env');
-        return;
+        this.logger.warn('No secrets were set to env');
+        return false;
       }
 
       Object.keys(secrets).forEach((key) => {
-        process.env[key] = secrets[key];
+        process.env[key] = String(secrets[key]);
       });
 
       this.logger.log(
-        `All secrets from aws secrets manager(id: ${JSON.stringify(
-          this.options.secretsSource,
-        )}) are set to env`,
+        `All secrets from aws secrets manager(id: ${JSON.stringify(ids)}) are set to env`,
       );
 
       if (this.options.isDebug) {
         this.logger.log(JSON.stringify(secrets, null, 2));
       }
+      return true;
     } catch (err: any) {
       this.logger.error(err.message);
+      return false;
     }
   }
 
-  async getAllSecrects<T>() {
+  /**
+   * Fetches every secret in `secretsSource` and merges their JSON key/value
+   * pairs (later secrets win). Returns `undefined` and logs the error if any
+   * secret cannot be fetched or is not a JSON object.
+   */
+  async getAllSecrects<T>(): Promise<T | undefined> {
     try {
-      const secretsIds = Array.isArray(this.options.secretsSource)
-        ? this.options.secretsSource
-        : [this.options.secretsSource];
+      const secretsIds = this.secretIds();
 
-      if (!Boolean(secretsIds.length)) {
+      if (!secretsIds.length) {
         this.logger.log('Secrets source is empty');
       }
 
-      const commands = secretsIds.map(
-        (secretId) =>
-          new GetSecretValueCommand({
-            SecretId: secretId,
-          }),
+      const secrets = await Promise.all(
+        secretsIds.map(async (secretId) => {
+          const value = this.parse(secretId, await this.fetch(secretId));
+          if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            throw new Error(
+              `secret ${secretId} is not a JSON key/value secret`,
+            );
+          }
+          return value as Record<string, unknown>;
+        }),
       );
 
-      const resp = commands.map((command) =>
-        this.options.secretsManager.send(command),
-      );
-
-      const secrets = await Promise.all(resp);
-
-      const response = secrets.reduce((acc, secret) => {
-        const sec = JSON.parse(secret.SecretString);
-
-        const allSecrets = {
-          ...acc,
-          ...sec,
-        };
-        return allSecrets;
-      }, {});
-
-      return response as T;
+      return Object.assign({}, ...secrets) as T;
     } catch (e: any) {
       this.logger.error(`Unable to fetch secrets(${e.message})`);
     }
   }
 
-  async getSecretsByID<T>(secretId: string) {
+  /**
+   * Fetches one secret by name or ARN and returns its parsed JSON value.
+   * Returns `undefined` and logs the error if it cannot be fetched or parsed.
+   */
+  async getSecretsByID<T>(secretId: string): Promise<T | undefined> {
     try {
-      const command = new GetSecretValueCommand({
-        SecretId: secretId,
-      } as any);
-
-      const secret = await this.options.secretsManager.send(command);
-
-      return JSON.parse(secret.SecretString) as T;
+      return this.parse(secretId, await this.fetch(secretId)) as T;
     } catch (e: any) {
       this.logger.error(`Unable to fetch secrets(${e.message})`);
+    }
+  }
+
+  private secretIds(): string[] {
+    const source = this.options.secretsSource;
+    const ids = typeof source === 'string' ? [source] : [...(source ?? [])];
+    return ids.filter(
+      (id): id is string => typeof id === 'string' && id.length > 0,
+    );
+  }
+
+  /** GetSecretValue with a deadline; error messages never contain the value. */
+  private async fetch(secretId: string): Promise<string> {
+    const timeout = this.options.timeout ?? DEFAULT_TIMEOUT_MS;
+    const abortSignal = timeout > 0 ? AbortSignal.timeout(timeout) : undefined;
+    let secretString: string | undefined;
+    try {
+      const secret = await this.options.secretsManager.send(
+        new GetSecretValueCommand({ SecretId: secretId }),
+        { abortSignal },
+      );
+      secretString = secret.SecretString;
+    } catch (e: any) {
+      if (abortSignal?.aborted) {
+        throw new Error(
+          `secret ${secretId}: no answer from AWS Secrets Manager within ${timeout} ms`,
+        );
+      }
+      throw new Error(`secret ${secretId}: ${e?.message ?? e}`);
+    }
+    if (typeof secretString !== 'string') {
+      throw new Error(
+        `secret ${secretId} has no SecretString (binary secrets are not supported)`,
+      );
+    }
+    return secretString;
+  }
+
+  private parse(secretId: string, secretString: string): unknown {
+    try {
+      return JSON.parse(secretString);
+    } catch {
+      // the SyntaxError message quotes part of the value: never log it
+      throw new Error(`secret ${secretId} is not a JSON key/value secret`);
     }
   }
 }

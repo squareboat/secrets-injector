@@ -2,21 +2,20 @@
   "compilerOptions": {
     "module": "commonjs",
     "declaration": true,
-    "removeComments": true,
+    "removeComments": false,
     "emitDecoratorMetadata": true,
     "experimentalDecorators": true,
+    "useDefineForClassFields": false,
     "allowSyntheticDefaultImports": true,
-    "target": "es2017",
-    "sourceMap": true,
+    "esModuleInterop": true,
+    "target": "es2022",
+    "sourceMap": false,
     "outDir": "./dist",
-    "baseUrl": "./",
-    "incremental": true,
+    "rootDir": "./src/aws-secrets-manager",
+    "strict": true,
     "skipLibCheck": true,
-    "strictNullChecks": false,
-    "noImplicitAny": false,
-    "strictBindCallApply": false,
-    "forceConsistentCasingInFileNames": false,
-    "noFallthroughCasesInSwitch": false,
-    "esModuleInterop": true
-  }
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  },
+  "include": ["src/aws-secrets-manager/**/*"]
 }
