@@ -11,11 +11,11 @@
     "target": "es2022",
     "sourceMap": false,
     "outDir": "./dist",
-    "rootDir": "./src",
+    "rootDir": "./src/aws-secrets-manager",
     "strict": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "types": ["node"]
   },
-  "include": ["src/**/*"]
+  "include": ["src/aws-secrets-manager/**/*"]
 }
