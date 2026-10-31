@@ -59,7 +59,7 @@ export class AWSSecretsService {
   /**
    * Fetches every secret in `secretsSource` and merges their JSON key/value
    * pairs (later secrets win). Returns `undefined` and logs the error if any
-   * secret cannot be fetched or parsed.
+   * secret cannot be fetched or is not a JSON object.
    */
   async getAllSecrects<T>(): Promise<T | undefined> {
     try {
@@ -70,10 +70,15 @@ export class AWSSecretsService {
       }
 
       const secrets = await Promise.all(
-        secretsIds.map(
-          async (secretId) =>
-            JSON.parse(await this.fetch(secretId)) as Record<string, unknown>,
-        ),
+        secretsIds.map(async (secretId) => {
+          const value = this.parse(secretId, await this.fetch(secretId));
+          if (!value || typeof value !== 'object' || Array.isArray(value)) {
+            throw new Error(
+              `secret ${secretId} is not a JSON key/value secret`,
+            );
+          }
+          return value as Record<string, unknown>;
+        }),
       );
 
       return Object.assign({}, ...secrets) as T;
@@ -88,7 +93,7 @@ export class AWSSecretsService {
    */
   async getSecretsByID<T>(secretId: string): Promise<T | undefined> {
     try {
-      return JSON.parse(await this.fetch(secretId)) as T;
+      return this.parse(secretId, await this.fetch(secretId)) as T;
     } catch (e: any) {
       this.logger.error(`Unable to fetch secrets(${e.message})`);
     }
@@ -102,7 +107,7 @@ export class AWSSecretsService {
     );
   }
 
-  /** GetSecretValue with a deadline. */
+  /** GetSecretValue with a deadline; error messages never contain the value. */
   private async fetch(secretId: string): Promise<string> {
     const timeout = this.options.timeout ?? DEFAULT_TIMEOUT_MS;
     const abortSignal = timeout > 0 ? AbortSignal.timeout(timeout) : undefined;
@@ -121,6 +126,20 @@ export class AWSSecretsService {
       }
       throw new Error(`secret ${secretId}: ${e?.message ?? e}`);
     }
-    return secretString as string;
+    if (typeof secretString !== 'string') {
+      throw new Error(
+        `secret ${secretId} has no SecretString (binary secrets are not supported)`,
+      );
+    }
+    return secretString;
+  }
+
+  private parse(secretId: string, secretString: string): unknown {
+    try {
+      return JSON.parse(secretString);
+    } catch {
+      // the SyntaxError message quotes part of the value: never log it
+      throw new Error(`secret ${secretId} is not a JSON key/value secret`);
+    }
   }
 }
