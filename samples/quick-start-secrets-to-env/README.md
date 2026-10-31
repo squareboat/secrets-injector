@@ -26,4 +26,4 @@ AWS credentials come from the AWS SDK default chain (`AWS_ACCESS_KEY_ID`/`AWS_SE
 | `AWS_REGION` | `ap-south-1` | Region of the secret                  |
 | `SECRET_ID`  | `test/sm`    | Secret name or ARN                    |
 | `PORT`       | `3000`       | HTTP port                             |
-| `NODE_ENV`   |              | `production` turns off `isDebug` logs |
+| `NODE_ENV`   |              | `development` logs the secret values (`isDebug`) |

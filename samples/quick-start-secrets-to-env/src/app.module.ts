@@ -16,7 +16,7 @@ const AWSSecretsManagerProps: AWSSecretsManagerModuleOptions = {
   secretsManager: new SecretsManagerClient({
     region: process.env.AWS_REGION || 'ap-south-1',
   }),
-  isDebug: process.env.NODE_ENV !== 'production', // logs secret values: never in production
+  isDebug: process.env.NODE_ENV === 'development', // logs secret values: never in production
   isSetToEnv: true, // set all secrets to env variables which will be available in process.env or @nestjs/config
   secretsSource: process.env.SECRET_ID || 'test/sm', // OR a list of secret names or ARNs: ['db/prod/config', 'app/prod/config']
 };
