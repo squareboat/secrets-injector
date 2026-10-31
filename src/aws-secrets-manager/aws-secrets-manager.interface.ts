@@ -1,5 +1,4 @@
-import { Type } from '@nestjs/common';
-import { ModuleMetadata } from '@nestjs/common/interfaces';
+import { ModuleMetadata, Type } from '@nestjs/common';
 import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 
 export interface AWSSecretsManagerModuleOptions {
