@@ -20,10 +20,11 @@
   - [Read secrets with AWSSecretsService](#read-secrets-with-awssecretsservice)
   - [Set process env variables from AWS Secrets Manager](#set-process-env-variables-from-aws-secrets-manager)
   - [When are the variables available?](#when-are-the-variables-available)
+  - [Load secrets before the app is created](#load-secrets-before-the-app-is-created)
   - [Async configuration](#async-configuration)
 - [Options](#options)
 - [Secret format](#secret-format)
-- [Errors](#errors)
+- [Errors and timeouts](#errors-and-timeouts)
 - [Local development and tests](#local-development-and-tests)
 - [Upgrading from 1.x](#upgrading-from-1x)
 - [Contributing](#contributing)
@@ -33,15 +34,17 @@
 ## Features
 
 - Read JSON secrets from AWS Secrets Manager by name or ARN.
-- Copy the key/value pairs of one or more secrets into `process.env` at application startup. Nest waits for this before it finishes creating the application.
+- Copy the key/value pairs of one or more secrets into `process.env`: in `main.ts` before the app is created (`loadSecretsToEnv()`), or while Nest creates the app (`isSetToEnv`).
 - `forRoot()` and `forRootAsync()` (`useFactory`, `useClass`, `useExisting`), global module.
-- Uses the AWS SDK v3 client you pass in, so region, credentials and endpoint are yours to configure.
+- Uses the AWS SDK v3 client you pass in, so region, credentials and endpoint are yours to configure. Every call has a deadline (10 s by default), so an unreachable endpoint cannot block startup.
 
 ## Requirements
 
 - NestJS 10, 11 or 12 (`@nestjs/common`)
 - `@aws-sdk/client-secrets-manager` v3
 - Node.js 20.19+, 22.12+ or 24+. NestJS 12 is published as ES modules only; this package is CommonJS and loads it with `require()`, which works without flags from Node 20.19 and 22.12.
+
+The AWS SDK is a peer dependency, so you choose its version. AWS SDK v3 releases published after the first week of January 2027 require Node 22 or newer (current releases already print a warning on Node 20). On Node 20, pin `@aws-sdk/client-secrets-manager` to a release from before then, or move to Node 22.
 
 ## Installation
 
@@ -54,7 +57,7 @@ The repository also has a sample app in [`samples/quick-start-secrets-to-env`](h
 ```bash
 git clone https://github.com/Anubhavjain786/secrets-injector.git
 cd secrets-injector
-npm install && npm run build
+npm install # also builds dist
 cd samples/quick-start-secrets-to-env
 npm install
 AWS_REGION=ap-south-1 SECRET_ID=test/sm npm run start:dev
@@ -123,11 +126,11 @@ export class AWSDBCredentialsService {
 }
 ```
 
-`getAllSecrects()` fetches every secret in `secretsSource` and returns their keys merged into one object (later secrets win). Both return `undefined` if a secret cannot be fetched or parsed (see [Errors](#errors)).
+`getAllSecrects()` fetches every secret in `secretsSource` and returns their keys merged into one object (later secrets win). Both return `undefined` if a secret cannot be fetched or parsed (see [Errors and timeouts](#errors-and-timeouts)).
 
 ### Set process env variables from AWS Secrets Manager
 
-With `isSetToEnv: true` and a `secretsSource`, the module fetches the secrets once at startup and copies every key into `process.env`:
+With `isSetToEnv: true` and a `secretsSource`, the module fetches the secrets once while Nest creates the app and copies every key into `process.env`:
 
 ```typescript
 import { Module } from '@nestjs/common';
@@ -160,24 +163,74 @@ Existing environment variables with the same name are overwritten.
 
 ### When are the variables available?
 
-The secrets are loaded while Nest creates the providers, not at build time and not when your modules are imported. They are in `process.env`:
+With `isSetToEnv` the secrets are loaded while Nest creates the providers. Nest creates the providers of all modules at the same time, and only the ones that inject `AWSSecretsService` wait for the secrets. So the variables are available:
 
-- once `await NestFactory.create(AppModule)` (or `createApplicationContext()`) has resolved, so in `main.ts` after that line and in every request handler;
-- in any provider that injects `AWSSecretsService`: Nest creates it only after the secrets are loaded;
-- in `ConfigService.get()` from `@nestjs/config`, because it reads `process.env` when it is called.
+- in `process.env` once `await NestFactory.create(AppModule)` (or `createApplicationContext()`) has resolved: in `main.ts` after that line, in request handlers, in `onModuleInit()` and later;
+- in providers and async factories that inject `AWSSecretsService`, through `process.env` or `ConfigService.get('DB_HOST')` (example below).
 
-They are **not** there yet for code that runs before the providers are created, for example a value read from `process.env` at the top of a file or inside `SomeModule.forRoot({ ... })`, or `ConfigModule.forRoot()` validation (`validate` / `validationSchema`), which checks the environment when the module is imported. For other modules that read the environment in an async factory, add `AWSSecretsService` to `inject` so they wait for the secrets:
+They are **not** available, or not up to date, in these cases:
+
+- code that reads `process.env` when a file is loaded, in the arguments of `SomeModule.forRoot({ ... })`, or in a provider that does not inject `AWSSecretsService`;
+- `registerAs()` / `ConfigModule.forRoot({ load })` factories: they run while the secrets are still loading, so `config.get('database.host')` stays `undefined`, also after `create()`;
+- `ConfigModule.forRoot({ validate })` or `validationSchema`: validation runs when the module is imported, so required keys fail. A key that already had a value at that point (from `.env`, the shell or a schema default) keeps that old value in `ConfigService.get()`, even though `process.env` has the secret.
+
+For those cases, [load the secrets in `main.ts`](#load-secrets-before-the-app-is-created) instead.
+
+Example of an async factory that waits for the secrets. `AWSSecretsService` is only injected to make Nest create the provider after the secrets are loaded. The same works for other modules' async factories, for example `TypeOrmModule.forRootAsync({ inject: [ConfigService, AWSSecretsService], ... })`.
 
 ```typescript
-TypeOrmModule.forRootAsync({
-  inject: [ConfigService, AWSSecretsService],
-  useFactory: (config: ConfigService) => ({
-    type: 'postgres',
-    host: config.get('DB_HOST'),
-    password: config.get('DB_PASSWORD'),
-  }),
-});
+import { Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { AWSSecretsService } from 'secrets-injector';
+
+export const DB_OPTIONS = 'DB_OPTIONS';
+
+@Module({
+  imports: [ConfigModule],
+  providers: [
+    {
+      provide: DB_OPTIONS,
+      inject: [ConfigService, AWSSecretsService],
+      useFactory: (config: ConfigService) => ({
+        host: config.get<string>('DB_HOST'),
+        password: config.get<string>('DB_PASSWORD'),
+      }),
+    },
+  ],
+  exports: [DB_OPTIONS],
+})
+export class DatabaseConfigModule {}
 ```
+
+### Load secrets before the app is created
+
+`loadSecretsToEnv()` fetches the secrets and writes them to `process.env` without Nest. Call it in `main.ts` and load `AppModule` only afterwards, so that every module, `ConfigModule` validation and `registerAs()` factories see the variables. Do not import `AppModule` at the top of `main.ts`: imports run before the rest of the file, so the module files (and `ConfigModule.forRoot()`) would run before the secrets are there.
+
+```typescript
+import { NestFactory } from '@nestjs/core';
+import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+import { loadSecretsToEnv } from 'secrets-injector';
+
+async function bootstrap() {
+  const loaded = await loadSecretsToEnv({
+    secretsManager: new SecretsManagerClient({
+      region: process.env.AWS_REGION,
+    }),
+    secretsSource: process.env.AWS_SECRET_ID ?? 'app/prod/config',
+  });
+  if (!loaded) {
+    process.exit(1); // or start without the secrets
+  }
+
+  // load the application only now
+  const { AppModule } = await import('./app.module');
+  const app = await NestFactory.create(AppModule);
+  await app.listen(process.env.PORT ?? 3000);
+}
+bootstrap();
+```
+
+It takes the same `secretsManager`, `secretsSource`, `isDebug` and `timeout` options as the module, logs errors instead of throwing, and resolves to `true` when the variables were set. You can still import `AWSSecretsManagerModule` (without `isSetToEnv`) to use `AWSSecretsService` in the app.
 
 ## Async configuration
 
@@ -217,10 +270,11 @@ export class AppModule {}
 The factory can be async. Instead of `useFactory` you can pass a class that implements `AWSSecretsManagerModuleOptionsFactory`, with `useClass` (the module creates it) or `useExisting` (an existing provider from one of the `imports`):
 
 ```typescript
-import { Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { Injectable, Module } from '@nestjs/common';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import {
+  AWSSecretsManagerModule,
   AWSSecretsManagerModuleOptions,
   AWSSecretsManagerModuleOptionsFactory,
 } from 'secrets-injector';
@@ -240,11 +294,16 @@ export class SecretsConfig implements AWSSecretsManagerModuleOptionsFactory {
   }
 }
 
-// in AppModule imports:
-AWSSecretsManagerModule.forRootAsync({
-  imports: [ConfigModule],
-  useClass: SecretsConfig,
-});
+@Module({
+  imports: [
+    ConfigModule.forRoot(),
+    AWSSecretsManagerModule.forRootAsync({
+      imports: [ConfigModule],
+      useClass: SecretsConfig,
+    }),
+  ],
+})
+export class AppModule {}
 ```
 
 ## Options
@@ -252,45 +311,55 @@ AWSSecretsManagerModule.forRootAsync({
 The options of `AWSSecretsManagerModule` are the `AWSSecretsManagerModuleOptions` interface:
 
 ```typescript
+import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+
 export interface AWSSecretsManagerModuleOptions {
   secretsManager: SecretsManagerClient;
   isSetToEnv?: boolean;
-  secretsSource?: string | string[];
+  secretsSource?: string | ReadonlyArray<string | undefined>;
   isDebug?: boolean;
+  timeout?: number;
 }
 ```
 
-| Option           | Description                                                                                               |
-| ---------------- | --------------------------------------------------------------------------------------------------------- |
-| `secretsManager` | A `SecretsManagerClient` from `@aws-sdk/client-secrets-manager`. Required.                                |
-| `isSetToEnv`     | Copy the secrets in `secretsSource` into `process.env` at startup. Default `false`.                       |
-| `secretsSource`  | Secret name or ARN, or a list of them. Used by `isSetToEnv` and `getAllSecrects()`.                       |
-| `isDebug`        | Log the loaded secrets **including their values** after they are set to env. Do not enable in production. |
+| Option           | Description                                                                                                                                                         |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `secretsManager` | A `SecretsManagerClient` from `@aws-sdk/client-secrets-manager`. Required.                                                                                          |
+| `isSetToEnv`     | Copy the secrets in `secretsSource` into `process.env` at startup. Default `false`.                                                                                 |
+| `secretsSource`  | Secret name or ARN, or a list of them. Empty and `undefined` entries are skipped. Used by `isSetToEnv` and `getAllSecrects()`.                                      |
+| `isDebug`        | Log the loaded secrets **including their values** after they are set to env. Do not enable in production.                                                           |
+| `timeout`        | Maximum time in ms for each Secrets Manager call made by this package, SDK retries included. Default `10000`; `0` turns it off (only your client's timeouts apply). |
 
-All interfaces are exported from the package root:
+The package root exports `AWSSecretsManagerModule`, `AWSSecretsService`, `loadSecretsToEnv`, the options token `AWS_SECRETS_MANAGER_MODULE_OPTIONS` and these types:
 
 ```typescript
 import {
   AWSSecretsManagerModuleOptions,
   AWSSecretsManagerModuleAsyncOptions,
   AWSSecretsManagerModuleOptionsFactory,
+  LoadSecretsToEnvOptions,
+  SecretsSource,
 } from 'secrets-injector';
 ```
 
 ## Secret format
 
-Each secret must be stored as a JSON object in `SecretString` (the "Key/value" type in the AWS console), for example `{"DB_HOST": "db.internal", "DB_PORT": 5432}`. With several secrets the keys are merged in order and later secrets win. `process.env` only holds strings, so `5432` becomes `"5432"` and `true` becomes `"true"`. Plain-text and binary secrets are not supported.
+Each secret must be stored as a JSON object in `SecretString` (the "Key/value" type in the AWS console), for example `{"DB_HOST": "db.internal", "DB_PORT": 5432}`. With several secrets the keys are merged in order and later secrets win. `process.env` only holds strings, so `5432` becomes `"5432"` and `true` becomes `"true"`. Plain-text and binary secrets are rejected with an error that names the secret but never contains its value.
 
-## Errors
+## Errors and timeouts
 
-The module does not throw when Secrets Manager cannot be reached or a secret is missing or not JSON. It logs `Unable to fetch secrets(...)` through the Nest logger, `getSecretsByID()` / `getAllSecrects()` return `undefined`, and with `isSetToEnv` the application starts without the variables. If one secret in `secretsSource` fails, none of them is set. Check for required variables yourself if the app cannot run without them.
+Before fetching, the module logs `Loading N secret(s) from AWS Secrets Manager (id: [...])` (ids only). It does not throw when Secrets Manager cannot be reached, a secret is missing, or a secret is not a JSON object: it logs `Unable to fetch secrets(secret <id>: ...)` through the Nest logger, `getSecretsByID()` / `getAllSecrects()` return `undefined`, `loadSecretsToEnv()` resolves to `false`, and with `isSetToEnv` the application starts without the variables. If one secret in `secretsSource` fails, none of them is set. Check for required variables yourself if the app cannot run without them.
+
+The AWS SDK has no connection or request timeout by default. If the endpoint accepts the connection but never answers, or the connection never completes (for example a private subnet without a NAT gateway or a Secrets Manager VPC endpoint), a call would wait forever and the app would never start. This package therefore gives every call a deadline, `timeout` (default 10 s, SDK retries included). When it passes, the call is aborted and handled like any other error: `Unable to fetch secrets(secret <id>: no answer from AWS Secrets Manager within 10000 ms)`. Secrets are fetched in parallel, so startup waits at most about `timeout`. Error messages never contain secret values; only `isDebug` logs them.
 
 ## Local development and tests
 
 Point the client at a local Secrets Manager such as [LocalStack](https://www.localstack.cloud/) or [moto](https://github.com/getmoto/moto) with the `endpoint` option, or set `AWS_ENDPOINT_URL_SECRETS_MANAGER`:
 
 ```typescript
-new SecretsManagerClient({
+import { SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
+
+export const secretsManager = new SecretsManagerClient({
   region: 'us-east-1',
   endpoint: 'http://localhost:4566',
   credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
@@ -301,9 +370,13 @@ new SecretsManagerClient({
 
 - NestJS 7, 8 and 9 are no longer supported; use NestJS 10, 11 or 12. `reflect-metadata` is now a peer dependency (every Nest app has it).
 - Node.js 20.19+, 22.12+ or 24+ is required.
-- `isSetToEnv` is now awaited: `NestFactory.create()` resolves after the secrets are in `process.env`, and providers that inject `AWSSecretsService` are created after them. In 1.x the secrets were fetched in the background and usually arrived after the app had started.
+- `isSetToEnv` is now awaited: `NestFactory.create()` resolves after the secrets are in `process.env`, and providers that inject `AWSSecretsService` are created after them. In 1.x the secrets were fetched in the background and usually arrived after the app had started. Startup now waits for Secrets Manager, at most about `timeout` (10 s by default).
+- Each Secrets Manager call made by the package has a 10 s deadline (`timeout`). Set `timeout: 0` to rely only on your client's own timeouts.
+- `new AWSSecretsService(options)` no longer starts loading the secrets in its constructor. If you create the service yourself, call `await service.setAllSecrectToEnv()` or use `loadSecretsToEnv(options)`.
 - `getSecretsByID()` and `getAllSecrects()` are typed `Promise<T | undefined>`, because they return `undefined` on errors. With `strictNullChecks` you may need to handle `undefined`.
+- Error messages name the secret (`secret <id>: ...`) and no longer include the parser message, which quoted part of a plain-text secret value.
 - `forRootAsync()` exports only `AWSSecretsService`, like `forRoot()` (it used to export its internal providers too), supports `useExisting`, and throws if none of `useFactory`, `useClass` or `useExisting` is given.
+- The files in `dist/` have the same names as in 1.x, so deep imports such as `secrets-injector/dist/contstants` keep working. The options token is now also exported from the package root as `AWS_SECRETS_MANAGER_MODULE_OPTIONS`; prefer that.
 
 ## Contributing
 
